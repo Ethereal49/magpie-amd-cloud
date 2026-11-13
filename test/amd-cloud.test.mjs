@@ -14,6 +14,14 @@ import {
 } from "../lib/catalog.mjs"
 import { usageToMagpie } from "../lib/usage.mjs"
 import {
+  recordCost,
+  spentFor,
+  costOfResponse,
+  costOfStreamText,
+  estimateWindow,
+  // 重置进程内累计用（测试隔离）
+} from "../lib/points.mjs"
+import {
   MODEL_API_BASE,
   PLATFORM_API_BASE,
   LAB_MODEL_API_BASE,
@@ -112,10 +120,11 @@ test("factory produces two providers with distinct ids, names and bases", async 
   assert.equal(Object.keys(cfgCn.provider["amd-cloud"].models).length, 2)
   assert.equal(Object.keys(cfgLab.provider["amd-cloud-lab"].models).length, 7)
 
-  // lab 无用量窗口，指向个人页（用量+续期都在那里）
-  const u = await hooksLab.auth.usage()
+  // lab 无用量端点：窗口来自本地预估（未记录请求时为空），并指向个人页
+  const u = await hooksLab.auth.usage(async () => ({ type: "api", key: "factory-test-key" }))
   assert.deepEqual(u.windows, [])
   assert.match(u.error, /notebooks\.amd\.com\/profile/)
+  assert.equal(u.plan, "AMD Cloud Lab")
   // 两站的 key 输入提示各按各的前缀
   assert.equal(hooksCn.auth.methods[0].placeholder, "rc-…")
   assert.equal(hooksLab.auth.methods[0].placeholder, "tl-…")
@@ -410,4 +419,68 @@ test("usageToMagpie guards empty payloads", () => {
   for (const bad of [null, undefined, "x", 42]) {
     assert.match(usageToMagpie(bad).error, /响应为空/)
   }
+})
+
+// ---------- points 本地预估（lab：usage.cost 非标字段自记账） ----------
+
+test("costOfResponse extracts usage.cost from the chat response (2026-11-13 实测形状)", () => {
+  const body = {
+    id: "d290c87d",
+    object: "chat.completion",
+    model: "Qwen3.8-27B",
+    choices: [{ message: { role: "assistant", content: "" }, finish_reason: "length" }],
+    usage: {
+      prompt_tokens: 53,
+      completion_tokens: 8,
+      reasoning_tokens: 8,
+      prompt_tokens_details: { cached_tokens: 0 },
+      cost: 0.000002415,
+    },
+  }
+  assert.equal(costOfResponse(body), 0.000002415)
+  // 无 cost / 为 0 / 非法的响应
+  assert.equal(costOfResponse({ usage: {} }), null)
+  assert.equal(costOfResponse({ usage: { cost: 0 } }), null)
+  assert.equal(costOfResponse({}), null)
+  assert.equal(costOfResponse(null), null)
+})
+
+test("costOfStreamText finds cost in SSE chunks", () => {
+  const sse = [
+    'data: {"id":"x","choices":[{"delta":{"content":"he"}}]}',
+    "",
+    'data: {"id":"x","choices":[],"usage":{"prompt_tokens":53,"completion_tokens":8,"cost":2.415e-6}}',
+    "",
+    "data: [DONE]",
+  ].join("\n")
+  assert.equal(costOfStreamText(sse), 2.415e-6)
+  // 无 usage 的流
+  assert.equal(costOfStreamText('data: {"choices":[{}]}\n\n'), null)
+})
+
+test("recordCost accumulates per account and estimateWindow shapes the usage payload", () => {
+  const acct = "test-acct-1"
+  assert.equal(recordCost(acct, "Qwen3.8-27B", 0.000002415), true)
+  assert.equal(recordCost(acct, "Qwen3.8-27B", 0.000002415), true)
+  assert.equal(recordCost(acct, "DeepSeek-V4-Flash", 0.0001), true)
+  // 非法值拒收
+  assert.equal(recordCost(acct, "X", 0), false)
+  assert.equal(recordCost(acct, "X", NaN), false)
+  assert.equal(recordCost(acct, "X", -1), false)
+
+  const s = spentFor(acct)
+  assert.equal(s.calls, 3)
+  assert.ok(Math.abs(s.total - 0.00010483) < 1e-12)
+
+  const est = estimateWindow(acct)
+  assert.equal(est.windows.length, 1)
+  const w = est.windows[0]
+  assert.equal(w.unit, "pts")
+  assert.equal(w.limit, 10)
+  assert.equal(w.display, "0.000105 / 10 pts")
+  assert.match(est.note, /本地预估/)
+  assert.match(est.note, /3 次请求/)
+  assert.match(est.note, /Qwen3\.8-27B/)
+  // 未记录的账号：无窗口
+  assert.deepEqual(estimateWindow("never-seen").windows, [])
 })
