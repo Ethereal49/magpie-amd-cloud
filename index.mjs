@@ -37,7 +37,9 @@ function labFetch(key) {
   return async function fetch(input, init) {
     const headers = new Headers(init?.headers)
     headers.set("user-agent", USER_AGENT)
-    const res = await fetch(input, { ...init, headers })
+    // 注意：这里必须用全局 fetch——loader 返回的 fetch 会替换宿主里的同名引用，
+    // 直接写 fetch() 会递归调用自己（真机实测栈溢出 502）
+    const res = await globalThis.fetch(input, { ...init, headers })
     try {
       const url = String(input)
       if (res.ok && url.includes("/chat/completions")) {
