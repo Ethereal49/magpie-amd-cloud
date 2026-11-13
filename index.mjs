@@ -18,6 +18,7 @@ import {
   MODEL_API_BASE,
   LAB_MODEL_API_BASE,
   LAB_CONSOLE_URL,
+  LAB_PROFILE_URL,
   PLUGIN_VERSION,
   USER_AGENT,
   fetchJSON,
@@ -28,8 +29,8 @@ import { usageToMagpie } from "./lib/usage.mjs"
 // 官方限流：每密钥 30 RPM / 8 并发（国内站文档）；账号 20 RPM。两站共用口径。
 const MAX_CONCURRENCY = 8
 
-// 两个供应商共享同一套钩子形状，只差 id / 展示名 / baseURL / 兜底表 / usage 实现。
-function makePlugin({ provider, name, base, fallbacks, usage }) {
+// 两个供应商共享同一套钩子形状，只差 id / 展示名 / baseURL / 兜底表 / usage 实现 / key 形状。
+function makePlugin({ provider, name, base, fallbacks, usage, keyPlaceholder = "rc-…" }) {
   return async function plugin() {
     return {
       // 供应商与静态兜底模型。用 ??= 以免覆盖用户在 plugins.json 里的同名配置。
@@ -46,7 +47,7 @@ function makePlugin({ provider, name, base, fallbacks, usage }) {
       auth: {
         provider,
         maxConcurrency: MAX_CONCURRENCY,
-        methods: [{ type: "api", label: `${name} API key`, placeholder: "rc-… / sk-…" }],
+        methods: [{ type: "api", label: `${name} API key`, placeholder: keyPlaceholder }],
         // key 原样保存（不做 authorize）：无效 key 由首个请求的 401 触发 magpie 的账号标记。
         async loader(getAuth) {
           const auth = await getAuth()
@@ -112,11 +113,13 @@ export const AmdCloudLabPlugin = makePlugin({
   name: "AMD Cloud Lab",
   base: LAB_MODEL_API_BASE,
   fallbacks: LAB_FALLBACK_MODELS,
-  // 国际站没有用量端点（/v1/usage 404），额度只能在控制台看；key 30 天有效需手动续。
+  keyPlaceholder: "tl-…",
+  // 国际站没有用量端点（/v1/usage 404）；points 是 30 天周期总量（非每日重置），
+  // 用量与续期（Extend by 15 days / Request more points）都在个人页操作。
   async usage() {
     return {
       plan: "AMD Cloud Lab",
-      error: `额度请到控制台查看（key 30 天有效）：${LAB_CONSOLE_URL}`,
+      error: `Points（30 天周期总量）与续期请到个人页查看：${LAB_PROFILE_URL}`,
       windows: [],
     }
   },

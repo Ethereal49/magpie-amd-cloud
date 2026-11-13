@@ -18,6 +18,7 @@ import {
   PLATFORM_API_BASE,
   LAB_MODEL_API_BASE,
   LAB_CONSOLE_URL,
+  LAB_PROFILE_URL,
   USER_AGENT,
   fetchJSON,
 } from "../lib/platform.mjs"
@@ -81,9 +82,10 @@ const DOC_MODEL_ENTRY = {
 test("addresses match the official docs", () => {
   assert.equal(MODEL_API_BASE, "https://developer.amd.com.cn/radeon/api/v1")
   assert.equal(PLATFORM_API_BASE, "https://radeon-global.anruicloud.com")
-  // 国际站 TokenLab（2026-11-13 真实 key 只读核实）
+  // 国际站 TokenLab（2026-11-13 真实 key 只读核实 + muse 实录）
   assert.equal(LAB_MODEL_API_BASE, "https://api.tokenlab.amd.com/v1")
   assert.equal(LAB_CONSOLE_URL, "https://notebooks.amd.com/tokenlab")
+  assert.equal(LAB_PROFILE_URL, "https://notebooks.amd.com/profile")
   assert.match(USER_AGENT, /^magpie-amd-cloud\//)
 })
 
@@ -110,10 +112,13 @@ test("factory produces two providers with distinct ids, names and bases", async 
   assert.equal(Object.keys(cfgCn.provider["amd-cloud"].models).length, 2)
   assert.equal(Object.keys(cfgLab.provider["amd-cloud-lab"].models).length, 7)
 
-  // lab 无用量窗口，引导去控制台
+  // lab 无用量窗口，指向个人页（用量+续期都在那里）
   const u = await hooksLab.auth.usage()
   assert.deepEqual(u.windows, [])
-  assert.match(u.error, /notebooks\.amd\.com\/tokenlab/)
+  assert.match(u.error, /notebooks\.amd\.com\/profile/)
+  // 两站的 key 输入提示各按各的前缀
+  assert.equal(hooksCn.auth.methods[0].placeholder, "rc-…")
+  assert.equal(hooksLab.auth.methods[0].placeholder, "tl-…")
 
   // provider.models 未登录时原样返回
   const sentinel = { a: 1 }

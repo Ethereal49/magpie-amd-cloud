@@ -17,7 +17,7 @@
 - **供应商行**：`amd-cloud (AMD Cloud, N models)  signed in` / `amd-cloud-lab (AMD Cloud Lab, N models)  signed in`。多把 key 重复登录即多账号。
 - **账号额度卡片 + `magpie quota`**：
   - `amd-cloud`（国内站）：「点数（24h 滚动）」窗口——已用百分比、`已用 / 上限 pts`、重置倒计时（滚动周期：从本周期首次计费起 24 小时后重置，非固定零点）；账号旁显示组织 ID（`oneclick-org-…`）。
-  - `amd-cloud-lab`（国际站）：无用量 API，额度处显示控制台链接。控制台目前显示「Points remaining: 10.00000000 of 10 points」，是 Daily reset 还是一次性尚未确认。
+  - `amd-cloud-lab`（国际站）：无用量 API，额度处显示个人页链接。**Points 是 30 天接入期的总量（10 pts），不是每日重置**——与国内站完全不同，别按每日额度假设安排用量。
   - 两站都把这套数字叫 **pts（点数）**，官方明示是免费服务的配额计量而非真实费用；国内站 API 字段名叫 `daily_cost_*_usd`，数值与 pts 完全一致（1 pt ≡ 1 名义美元），插件按 pts 口径展示。
 - **模型选择器 / Agent**：`amd-cloud/...` 与 `amd-cloud-lab/...` 各自站点目录里的全部聊天模型——模型列表登录后运行时从各自的 `GET /v1/models` 拉取，不写死，新模型上架自动出现。
 - **网关 `GET /v1/magpie/quotas`**：暴露同样的额度信息给外部工具。
@@ -45,12 +45,19 @@
 
 前置条件：[AMD AI Developer Program](https://developer.amd.com/)（国际站）账号，能登进 [notebooks.amd.com/tokenlab](https://notebooks.amd.com/tokenlab)。
 
-1. **拿 key**：登录控制台（AMD 企业 SSO），在 TokenLab 页面签发 API key。**key 30 天有效**，过期需回控制台重新生成——插件无法自动续期，到期后 magpie 会标 401，重新 `magpie plugin login amd-cloud-lab` 粘新 key 即可。
+1. **拿 key**：登录控制台（AMD 企业 SSO），主页 "Your API key" 区签发 API key（`tl-` 前缀）。**key 随接入期 30 天有效**，过期/被 Regenerate 后 magpie 会标 401，重新 `magpie plugin login amd-cloud-lab` 粘新 key 即可。
 2. **登录并验证**：
    ```sh
-   magpie plugin login amd-cloud-lab   # 粘贴 TokenLab key
+   magpie plugin login amd-cloud-lab   # 粘贴 tl-… key
    magpie provider test amd-cloud-lab  # 可选：小请求验证
    ```
+
+**Points 生命周期（控制台 FAQ 写死的规则，2026-11-13 实录）**：
+
+- Points 总量 10 pts，覆盖整个 30 天接入期（本期至 2026-12-13），**用完即停服直到重置**，无付费通道。
+- **Extend by 15 days**：只加接入期不加 points、只能用一次；仅当前周期**最后 5 天内**可申请。
+- **Request more points**：再申请一份 10 points；仅到期前**最后 7 天内**、或剩余 points **≤ 2** 时可申请。
+- 用量明细（Points by model / Points history）与续期按钮都在[个人页](https://notebooks.amd.com/profile)。
 
 两站可以同时登录、同时使用，模型 id 不冲突。
 
@@ -87,7 +94,15 @@
 | MiniCPM-V-4.7-35B-A3B | 262,144 | ✅ | 0.035 / 0.07 / 0.0007 |
 | MiniCPM5-2B | 131,072 | ❌ | 0.035 / 0.07 / 0.0007 |
 
-价目与国内站同模型完全一致（pts 同一套体系）；控制台显示名带的 0731/1017 是构建版本后缀，API id 不含。DeepSeek-V4-Flash 的目录在这里声明了 `reasoning_effort`（国内站目录未列），档位映射同上。与国内站的差异：**没有** GLM-5.3-Flash、MiMo-V2.6-Flash、Qwen3.8-Flash-Next；无 `/v1/usage`（额度只在控制台显示，每模型「X% used」与 Available/Busy 状态也是网页专属）；key 30 天有效。
+价目与国内站同模型完全一致（pts 同一套体系）；控制台显示名带的 0731/1017 是构建版本后缀，API id 不含。DeepSeek-V4-Flash 的目录在这里声明了 `reasoning_effort`（国内站目录未列），档位映射同上。与国内站的差异：**没有** GLM-5.3-Flash、MiMo-V2.6-Flash、Qwen3.8-Flash-Next；无 `/v1/usage`（points 总量与明细只在[个人页](https://notebooks.amd.com/profile)显示）；key 随 30 天接入期有效。
+
+**国际站特有约束**（2026-11-13 控制台实录）：
+
+- **Points 是 30 天周期总量**（10 pts），非每日重置；用完停服直到重置，无付费通道。
+- **限速 20 requests per minute**——全账号、按模型计（FAQ 原文），比国内站更紧；并发上限页面未写，插件沿用 8 路并发。
+- **决策模型 Clef/d3/d3-flash 走 `/v1/systemone`**（`state` + `questions` 请求体），不是 chat 模型——插件已过滤，不会出现在模型选择器里。
+- 模型卡片上的「x% used」**不是**本账号用量（含义页面未解释），勿当额度参考。
+- 错误语义：402/403 常见于 points 用尽或权限问题，401 是 key 过期/无效——都到个人页处理。
 
 **价格口径与校验**：models.dev 与 magpie 的 `cost` 同为「每百万 token 美元」，本插件把 AMD 目录的每 token 价 ×1e6 换算，并已用 `/v1/usage` 实际计费逐模型核验（输入/输出/缓存读/推理 token 全部与目录价一致；Qwen 的 reasoning token 计入输出计费但在 `completion_tokens` 外单列）。models.dev 的 `amd` 条目价格字段全为 0（未维护），其 `deepseek` 下同名模型是 DeepSeek 官方 API 价（$0.15/$0.60），均与 AMD 云不同——价格以 AMD 目录为准。额度按控制台的 **pts 点数**口径展示（与 API 的 `*_usd` 字段同值，1 pt ≡ 1 名义美元，非真实费用）。
 
@@ -110,7 +125,8 @@
 | 额度显示「账户尚未签发 API 密钥」 | 账户还没有 key：去控制台 Token Factory / Profile 页生成 |
 | 403 `account_not_verified` | 账户还在审核；过审前不发 key |
 | 401 / 提示重新登录（amd-cloud） | key 无效或已被轮换（控制台重新签发会立刻作废旧 key），重新 `magpie plugin login amd-cloud` |
-| 401（amd-cloud-lab） | **key 30 天有效期到了**，或已被轮换：到 notebooks.amd.com/tokenlab 重新生成，重新 `magpie plugin login amd-cloud-lab` |
+| 401（amd-cloud-lab） | **key 随 30 天接入期到期**，或已被 Regenerate：到 [notebooks.amd.com/tokenlab](https://notebooks.amd.com/tokenlab) 重新生成，重新 `magpie plugin login amd-cloud-lab` |
+| lab 请求 402/403 | Points 用尽（30 天周期总量，用完停服）或权限不足：到[个人页](https://notebooks.amd.com/profile)看 Points 余额；到期前最后 7 天（或剩余 ≤2 pts）可申请 more points |
 | 频繁 429 | 先看 `code`：`model_concurrency_rate_limit_exceeded` = 该模型共享并发满，换个模型；`token_*`/`ip_*` = 密钥或 IP 的 RPM/并发限制；给供应商配置多个账号（多把 key）可让 magpie 分流 |
 | 模型调用报 `Requested model … not supported` | 模型名不在共享目录里；`magpie plugin` 里看本插件实际拉到的列表 |
 
@@ -139,7 +155,7 @@ m plugin --json
 - `limit.output = 16384` 为保守假设，官方未公布最大输出 token 数。
 - 推理档位：DeepSeek `medium`、Qwen3.8-Flash-Next `low` 已实测接受（2026-11-01）；其余档位按官方模型页登记，未逐一实测。
 - 静态兜底收录文档/控制台确认的模型（国内站 2 个、国际站 7 个）；其余模型登录后由实时目录提供。
-- 国际站 10 pts 额度是每日重置还是一次性，尚未确认。
+- 国际站 points 的精确换算公式页面未给（仅定性说明按 token 与模型费率计）；并发上限数字未公布。
 
 ## 许可证
 

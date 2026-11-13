@@ -17,7 +17,7 @@ Once connected, every agent — Claude Code, Codex, OpenCode and more — can ca
 - **Provider rows**: `amd-cloud (AMD Cloud, N models)  signed in` / `amd-cloud-lab (AMD Cloud Lab, N models)  signed in`. Logging in again with another key adds another account.
 - **Quota card + `magpie quota`**:
   - `amd-cloud` (China): a "points (24h rolling)" window — percent used, `used / limit pts`, reset countdown (rolling period: resets 24 hours after the first billed request of the cycle, not at a fixed midnight); the account shows its organization ID (`oneclick-org-…`).
-  - `amd-cloud-lab` (International): no usage API, so the quota slot shows the console link. The console currently reads "Points remaining: 10.00000000 of 10 points"; whether that resets daily or once is not yet confirmed.
+  - `amd-cloud-lab` (International): no usage API, so the quota slot shows the profile link. **Points are a 30-day period total (10 pts), not a daily reset** — unlike the China site; don't budget them as daily quota.
   - Both sites label these numbers **pts (points)** and state outright they are free-tier quota tracking, not charges; the China API fields are named `daily_cost_*_usd` but carry the exact same values (1 pt ≡ 1 nominal USD), so the plugin displays them as pts.
 - **Model picker / agents**: every chat model in each site's catalog — after sign-in the list is fetched live from the site's own `GET /v1/models`, no hardcoded names, new models appear automatically.
 - **Gateway `GET /v1/magpie/quotas`** exposes the same quota to external tooling.
@@ -45,12 +45,19 @@ Prerequisite: a verified AMD Radeon Cloud account (pending accounts are not issu
 
 Prerequisite: an [AMD AI Developer Program](https://developer.amd.com/) account that can sign in to [notebooks.amd.com/tokenlab](https://notebooks.amd.com/tokenlab).
 
-1. **Get a key**: sign in to the console (AMD corporate SSO) and issue an API key on the TokenLab page. **Keys expire after 30 days** — the plugin cannot renew them; when it expires magpie marks 401, generate a new key in the console and run `magpie plugin login amd-cloud-lab` again.
+1. **Get a key**: sign in to the console (AMD corporate SSO) and issue an API key in the "Your API key" section (`tl-` prefix). **Keys last for the 30-day access period** — after expiry or Regenerate, magpie marks 401; generate a new key and run `magpie plugin login amd-cloud-lab` again.
 2. **Sign in and verify**:
    ```sh
-   magpie plugin login amd-cloud-lab   # paste the TokenLab key
+   magpie plugin login amd-cloud-lab   # paste the tl-… key
    magpie provider test amd-cloud-lab  # optional: one tiny request
    ```
+
+**Points lifecycle (hard rules from the console FAQ, recorded 2026-11-13)**:
+
+- 10 pts cover the whole 30-day access period (current one ends 2026-12-13); **once spent, service stops until reset** — there is no payment option.
+- **Extend by 15 days**: extends the period only (no points), once per cycle; requestable only in the **last 5 days** of the current period.
+- **Request more points**: another 10 pts; requestable only in the **last 7 days** before expiry, or when remaining points are **≤ 2**.
+- Usage detail (Points by model / Points history) and the renewal buttons live on the [profile page](https://notebooks.amd.com/profile).
 
 Both sites can be signed in and used at the same time; model ids do not collide.
 
@@ -87,7 +94,15 @@ The catalog also contains three aux routing/decision services (Clef/d3/d3-flash,
 | MiniCPM-V-4.7-35B-A3B | 262,144 | ✅ | 0.035 / 0.07 / 0.0007 |
 | MiniCPM5-2B | 131,072 | ❌ | 0.035 / 0.07 / 0.0007 |
 
-Prices match the China site model-for-model (same pts system); the console's 0731/1017 display suffixes are build versions, absent from API ids. Unlike the China catalog, DeepSeek-V4-Flash declares `reasoning_effort` here; effort mapping is the same. Differences vs the China site: **no** GLM-5.3-Flash, MiMo-V2.6-Flash, or Qwen3.8-Flash-Next; no `/v1/usage` (quota is console-only, and each model's "X% used" / Available/Busy status is web-only); keys expire after 30 days.
+Prices match the China site model-for-model (same pts system); the console's 0731/1017 display suffixes are build versions, absent from API ids. Unlike the China catalog, DeepSeek-V4-Flash declares `reasoning_effort` here; effort mapping is the same. Differences vs the China site: **no** GLM-5.3-Flash, MiMo-V2.6-Flash, or Qwen3.8-Flash-Next; no `/v1/usage` (points total and history are profile-page only); keys last for the 30-day access period.
+
+**International-specific constraints** (console FAQ, recorded 2026-11-13):
+
+- **Points are a 30-day period total** (10 pts), not a daily reset; service stops when spent, no paid tier.
+- **Rate limit 20 requests per minute** — whole account, per model (FAQ wording), tighter than the China site; no concurrency figure is published, the plugin keeps 8.
+- **Decision models Clef/d3/d3-flash use `/v1/systemone`** (`state` + `questions` payload), not chat — the plugin filters them out of the model picker.
+- Each model card's "X% used" is **not** your account usage (its meaning is unexplained); don't read it as quota.
+- Error semantics: 402/403 usually mean points exhausted or missing access; 401 means key expired/invalid — handle both on the profile page.
 
 **Pricing provenance & verification**: models.dev and magpie both express `cost` as USD per million tokens; the plugin converts AMD's per-token catalog prices ×1e6 and cross-checked them against actual billing via `/v1/usage` (input/output/cache-read/reasoning tokens all match the catalog; Qwen's reasoning tokens are billed as output but reported separately from `completion_tokens`). models.dev's `amd` entry has all costs at 0 (unmaintained), and its `deepseek` entry for the same model names is DeepSeek's own API pricing ($0.15/$0.60) — treat the AMD catalog as the source of truth. Quota is displayed in the console's **pts** unit (same values as the API's `*_usd` fields, 1 pt ≡ 1 nominal USD, not real charges).
 
@@ -110,7 +125,8 @@ Prices match the China site model-for-model (same pts system); the console's 073
 | Quota says "no API key issued" | Generate one in the console (Token Factory / Profile) |
 | 403 `account_not_verified` | Account still under review; keys are issued after approval |
 | 401 / asked to sign in again (amd-cloud) | Key invalid or rotated (re-issuing revokes the old one immediately); run `magpie plugin login amd-cloud` again |
-| 401 (amd-cloud-lab) | The **30-day key validity** elapsed, or the key was rotated: generate a new one at notebooks.amd.com/tokenlab and run `magpie plugin login amd-cloud-lab` again |
+| 401 (amd-cloud-lab) | The **30-day access period** elapsed, or the key was Regenerated: generate a new one at [notebooks.amd.com/tokenlab](https://notebooks.amd.com/tokenlab) and run `magpie plugin login amd-cloud-lab` again |
+| lab 402/403 | Points exhausted (30-day total, service stops) or access missing: check the balance on the [profile page](https://notebooks.amd.com/profile); more points are requestable in the last 7 days (or at ≤ 2 pts remaining) |
 | Frequent 429 | Check `code`: `model_concurrency_rate_limit_exceeded` = that model's shared concurrency is full, switch models; `token_*`/`ip_*` = key/IP RPM or concurrency limits; adding more accounts (keys) lets magpie spread the load |
 | `Requested model … not supported` | Model not in the shared catalog; check the list under `magpie plugin` |
 
@@ -139,7 +155,7 @@ m plugin --json
 - `limit.output = 16384` is a conservative guess; the max output token count is not published.
 - Effort variants: DeepSeek `medium` and Qwen3.8-Flash-Next `low` verified accepted (2026-11-01); the rest follow the official model pages, not exercised one by one.
 - The static fallbacks cover the documented models (2 China, 7 International); anything else comes from the live catalog once signed in.
-- International quota reset semantics (daily vs one-off 10 pts) not yet confirmed.
+- The exact points formula is not published (qualitative: tokens × per-model rate); no concurrency figure is published.
 
 ## License
 
