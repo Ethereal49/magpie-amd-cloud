@@ -4,7 +4,15 @@
   "description": "OpenCode provider plugin: AMD Radeon Cloud (AMD GPU Cloud) free shared Model APIs for magpie",
   "type": "module",
   "main": "./index.mjs",
-  "files": ["index.mjs", "lib", "README.md", "LICENSE"],
+  "files": [
+    "index.mjs",
+    "lib",
+    "icon.svg",
+    "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "keywords": [
     "opencode",
     "opencode-plugin",
@@ -25,7 +33,12 @@
   "homepage": "https://github.com/aqiu817/magpie-amd-cloud#readme",
   "bugs": "https://github.com/aqiu817/magpie-amd-cloud/issues",
   "magpie": {
+    "name": "AMD Cloud",
     "icon": "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20fill='%23ed1c24'%20d='M8%206h12v12z'/%3E%3Cpath%20fill='%23ed1c24'%20d='M4%2010h6l4%204v6H4z'/%3E%3C/svg%3E",
-    "maxConcurrency": 8
+    "maxConcurrency": 8,
+    "summary": {
+      "en": "Use AMD Radeon Cloud and TokenLab models with API key sign-in, live catalogs, rolling quota and local point estimates.",
+      "zh": "用 API Key 接入 AMD Radeon Cloud 与 TokenLab：动态模型目录、直连对话、滚动额度与本地积分预估。"
+    }
   }
 }
