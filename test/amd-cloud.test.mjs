@@ -4,14 +4,25 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 
-import { FALLBACK_MODELS, catalogToModels, entryToModel, isChatModel, perMillion } from "../lib/catalog.mjs"
+import {
+  FALLBACK_MODELS,
+  LAB_FALLBACK_MODELS,
+  catalogToModels,
+  entryToModel,
+  isChatModel,
+  perMillion,
+} from "../lib/catalog.mjs"
 import { usageToMagpie } from "../lib/usage.mjs"
 import {
   MODEL_API_BASE,
   PLATFORM_API_BASE,
+  LAB_MODEL_API_BASE,
+  LAB_CONSOLE_URL,
   USER_AGENT,
   fetchJSON,
 } from "../lib/platform.mjs"
+// 入口的双插件工厂：真实验证两个供应商的钩子形状（不发网络请求）
+import { AmdCloudPlugin, AmdCloudLabPlugin } from "../index.mjs"
 
 // ---------- fixtures（逐字段取自 radeon-cloud-docs 的样例响应） ----------
 
@@ -70,7 +81,80 @@ const DOC_MODEL_ENTRY = {
 test("addresses match the official docs", () => {
   assert.equal(MODEL_API_BASE, "https://developer.amd.com.cn/radeon/api/v1")
   assert.equal(PLATFORM_API_BASE, "https://radeon-global.anruicloud.com")
+  // 国际站 TokenLab（2026-11-13 真实 key 只读核实）
+  assert.equal(LAB_MODEL_API_BASE, "https://api.tokenlab.amd.com/v1")
+  assert.equal(LAB_CONSOLE_URL, "https://notebooks.amd.com/tokenlab")
   assert.match(USER_AGENT, /^magpie-amd-cloud\//)
+})
+
+// ---------- 双供应商工厂 ----------
+
+test("factory produces two providers with distinct ids, names and bases", async () => {
+  // magpie 契约：导出的函数被调用一次，返回 hooks
+  const hooksCn = await AmdCloudPlugin()
+  const hooksLab = await AmdCloudLabPlugin()
+
+  assert.equal(hooksCn.auth.provider, "amd-cloud")
+  assert.equal(hooksLab.auth.provider, "amd-cloud-lab")
+
+  const cfgCn = {}
+  const cfgLab = {}
+  await hooksCn.config(cfgCn)
+  await hooksLab.config(cfgLab)
+  assert.equal(cfgCn.provider["amd-cloud"].api, MODEL_API_BASE)
+  assert.equal(cfgLab.provider["amd-cloud-lab"].api, LAB_MODEL_API_BASE)
+  assert.equal(cfgCn.provider["amd-cloud"].name, "AMD Cloud")
+  assert.equal(cfgLab.provider["amd-cloud-lab"].name, "AMD Cloud Lab")
+
+  // 兜底表各就各位
+  assert.equal(Object.keys(cfgCn.provider["amd-cloud"].models).length, 2)
+  assert.equal(Object.keys(cfgLab.provider["amd-cloud-lab"].models).length, 7)
+
+  // lab 无用量窗口，引导去控制台
+  const u = await hooksLab.auth.usage()
+  assert.deepEqual(u.windows, [])
+  assert.match(u.error, /notebooks\.amd\.com\/tokenlab/)
+
+  // provider.models 未登录时原样返回
+  const sentinel = { a: 1 }
+  assert.equal(await hooksLab.provider.models(sentinel, {}), sentinel)
+})
+
+test("lab fallback pricing matches the console (2026-11-13)", () => {
+  const lab = LAB_FALLBACK_MODELS
+  // DeepSeek 双子：in/out 与 cache_read 三档中的前两档
+  assert.deepEqual(lab["DeepSeek-V4-Flash"].cost, { input: 0.14, output: 0.28, cache_read: 0.0028 })
+  assert.deepEqual(lab["DeepSeek-V4.1-Flash"].cost, { input: 0.28, output: 0.56, cache_read: 0.0056 })
+  // 其余五家同价：0.035 / 0.07 / 0.0007
+  for (const id of ["Gemma-4-31B-IT", "MiniCPM5-2B", "MiniCPM-V-4.7-1B", "MiniCPM-V-4.7-35B-A3B", "Qwen3.8-27B"]) {
+    assert.deepEqual(lab[id].cost, { input: 0.035, output: 0.07, cache_read: 0.0007 }, id)
+  }
+  // VLM 标记（text+image）与控制台一致
+  for (const id of ["DeepSeek-V4.1-Flash", "Gemma-4-31B-IT", "MiniCPM-V-4.7-1B", "MiniCPM-V-4.7-35B-A3B", "Qwen3.8-27B"]) {
+    assert.deepEqual(lab[id].modalities.input, ["text", "image"], id)
+  }
+  assert.equal(lab["MiniCPM5-2B"].modalities, undefined)
+  assert.equal(lab["DeepSeek-V4-Flash"].modalities, undefined)
+})
+
+test("entryToModel keeps base cost when catalog has no pricing (TokenLab shape)", () => {
+  const labEntry = {
+    id: "Gemma-4-31B-IT",
+    context_length: 262144,
+    supported_parameters: ["temperature", "tools"],
+    architecture: { input_modalities: ["text", "image"], output_modalities: ["text"] },
+    object: "model",
+    owned_by: "amd",
+    // 注意：无 pricing、无 providers 字段
+  }
+  const m = entryToModel(labEntry, LAB_FALLBACK_MODELS["Gemma-4-31B-IT"])
+  assert.deepEqual(m.cost, { input: 0.035, output: 0.07, cache_read: 0.0007 })
+  assert.equal(m.limit.context, 262144)
+  assert.deepEqual(m.modalities.input, ["text", "image"])
+
+  // 国内站目录给了 pricing 时仍以目录为准（回归）
+  const cn = entryToModel(DOC_MODEL_ENTRY, FALLBACK_MODELS["DeepSeek-V4-Flash"])
+  assert.deepEqual(cn.cost, { input: 0.14, output: 0.28, cache_read: 0.0028 })
 })
 
 test("fetchJSON sets Bearer and UA headers", async () => {
