@@ -19,8 +19,11 @@ import {
   costOfResponse,
   costOfStreamText,
   estimateWindow,
-  // 重置进程内累计用（测试隔离）
+  setLedgerDir,
 } from "../lib/points.mjs"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import {
   MODEL_API_BASE,
   PLATFORM_API_BASE,
@@ -459,28 +462,35 @@ test("costOfStreamText finds cost in SSE chunks", () => {
 })
 
 test("recordCost accumulates per account and estimateWindow shapes the usage payload", () => {
-  const acct = "test-acct-1"
-  assert.equal(recordCost(acct, "Qwen3.8-27B", 0.000002415), true)
-  assert.equal(recordCost(acct, "Qwen3.8-27B", 0.000002415), true)
-  assert.equal(recordCost(acct, "DeepSeek-V4-Flash", 0.0001), true)
-  // 非法值拒收
-  assert.equal(recordCost(acct, "X", 0), false)
-  assert.equal(recordCost(acct, "X", NaN), false)
-  assert.equal(recordCost(acct, "X", -1), false)
+  const dir = mkdtempSync(join(tmpdir(), "magpie-points-"))
+  try {
+    setLedgerDir(dir)
+    const acct = "test-acct-1"
+    assert.equal(recordCost(acct, "Qwen3.8-27B", 0.000002415), true)
+    assert.equal(recordCost(acct, "Qwen3.8-27B", 0.000002415), true)
+    assert.equal(recordCost(acct, "DeepSeek-V4-Flash", 0.0001), true)
+    // 非法值拒收
+    assert.equal(recordCost(acct, "X", 0), false)
+    assert.equal(recordCost(acct, "X", NaN), false)
+    assert.equal(recordCost(acct, "X", -1), false)
 
-  const s = spentFor(acct)
-  assert.equal(s.calls, 3)
-  assert.ok(Math.abs(s.total - 0.00010483) < 1e-12)
+    const s = spentFor(acct)
+    assert.equal(s.calls, 3)
+    assert.ok(Math.abs(s.total - 0.00010483) < 1e-12)
 
-  const est = estimateWindow(acct)
-  assert.equal(est.windows.length, 1)
-  const w = est.windows[0]
-  assert.equal(w.unit, "pts")
-  assert.equal(w.limit, 10)
-  assert.equal(w.display, "0.000105 / 10 pts")
-  assert.match(est.note, /本地预估/)
-  assert.match(est.note, /3 次请求/)
-  assert.match(est.note, /Qwen3\.8-27B/)
-  // 未记录的账号：无窗口
-  assert.deepEqual(estimateWindow("never-seen").windows, [])
+    const est = estimateWindow(acct)
+    assert.equal(est.windows.length, 1)
+    const w = est.windows[0]
+    assert.equal(w.unit, "pts")
+    assert.equal(w.limit, 10)
+    assert.equal(w.display, "0.000105 / 10 pts")
+    assert.match(est.note, /本地预估/)
+    assert.match(est.note, /3 次请求/)
+    assert.match(est.note, /Qwen3\.8-27B/)
+    // 未记录的账号：无窗口
+    assert.deepEqual(estimateWindow("never-seen").windows, [])
+  } finally {
+    setLedgerDir(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

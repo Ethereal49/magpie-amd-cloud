@@ -23,17 +23,16 @@ import {
   USER_AGENT,
   fetchJSON,
 } from "./lib/platform.mjs"
-import { costOfResponse, costOfStreamText } from "./lib/points.mjs"
 import { FALLBACK_MODELS, LAB_FALLBACK_MODELS, catalogToModels } from "./lib/catalog.mjs"
 import { usageToMagpie } from "./lib/usage.mjs"
-import { recordCost, estimateWindow } from "./lib/points.mjs"
+import { recordCost, estimateWindow, setLedgerDir, costOfResponse, costOfStreamText } from "./lib/points.mjs"
 
 // 官方限流：每密钥 30 RPM / 8 并发（国内站文档）；账号 20 RPM。两站共用口径。
 const MAX_CONCURRENCY = 8
 
 // lab 的 fetch：透传请求，并从响应里抓 usage.cost（TokenLab 自报的 points 消耗，
-// 非标字段）按账号本地累计——magpie 网关不认识该字段，插件自己记账给 usage 钩子用。
-// 流式响应的 usage 在最后一个 chunk，从累计缓冲里正则提取。
+// 非标字段）按账号持久化累计——magpie 网关不认识该字段，插件自己记账给 usage 钩子用。
+// 流式响应的 usage 在最后一个 chunk，后台 reader 逐块累计缓冲后提取（不阻塞主流）。
 function labFetch(key) {
   return async function fetch(input, init) {
     const headers = new Headers(init?.headers)
@@ -49,12 +48,26 @@ function labFetch(key) {
             return undefined
           }
         })()
-        const type = headers.get("content-type") ?? res.headers.get("content-type") ?? ""
-        if (type.includes("text/event-stream")) {
-          // 流式：clone 一份在后台累计，不碰返回给 magpie 的那条流
-          res.clone().text().then((text) => {
-            recordStreamCost(key, model, text)
-          }).catch(() => {})
+        const ct = res.headers.get("content-type") ?? ""
+        if (ct.includes("text/event-stream")) {
+          // clone 给后台 reader 扫描，不碰返回给 magpie 的那条流
+          const clone = res.clone()
+          ;(async () => {
+            const reader = clone.body?.getReader?.()
+            if (!reader) return
+            const dec = new TextDecoder()
+            let buf = ""
+            while (true) {
+              const { done, value } = await reader.read()
+              if (done) break
+              buf += dec.decode(value, { stream: true })
+              // 只保留尾部，cost 在末尾 usage chunk（控内存）
+              if (buf.length > 8000) buf = buf.slice(-4000)
+            }
+            buf += dec.decode()
+            const cost = costOfStreamText(buf)
+            if (cost != null) recordCost(key, model, cost)
+          })().catch(() => {})
         } else {
           const body = await res.clone().json().catch(() => null)
           const cost = body && costOfResponse(body)
@@ -68,15 +81,13 @@ function labFetch(key) {
   }
 }
 
-function recordStreamCost(key, model, text) {
-  const cost = costOfStreamText(text)
-  if (cost != null) recordCost(key, model, cost)
-}
-
 // 两个供应商共享同一套钩子形状，只差 id / 展示名 / baseURL / 兜底表 / usage 实现 / key 形状 /
 // fetch 形状（lab 要在响应里抓 points 记账）。
 function makePlugin({ provider, name, base, fallbacks, usage, keyPlaceholder = "rc-…", makeFetch }) {
-  return async function plugin() {
+  return async function plugin({ directory } = {}) {
+    // 两站都可能需要知道配置目录（lab 用于账本）；有 directory 就设上，
+    // points.mjs 也有固定路径兜底所以不传也能工作。
+    if (directory) setLedgerDir(directory)
     return {
       // 供应商与静态兜底模型。用 ??= 以免覆盖用户在 plugins.json 里的同名配置。
       config: async (cfg) => {
@@ -97,18 +108,17 @@ function makePlugin({ provider, name, base, fallbacks, usage, keyPlaceholder = "
         async loader(getAuth) {
           const auth = await getAuth()
           if (auth?.type !== "api") return {}
+          if (makeFetch) {
+            // lab：自定义 fetch 里要抓 usage.cost，本身已设 UA；key 从 auth.key 取
+            return { baseURL: base, fetch: makeFetch(auth.key ?? auth.accountId) }
+          }
           return {
             baseURL: base,
-            fetch: makeFetch ? makeFetch(auth) : undefined,
-            ...(makeFetch
-              ? {}
-              : {
-                  async fetch(input, init) {
-                    const headers = new Headers(init?.headers)
-                    headers.set("user-agent", USER_AGENT)
-                    return fetch(input, { ...init, headers })
-                  },
-                }),
+            async fetch(input, init) {
+              const headers = new Headers(init?.headers)
+              headers.set("user-agent", USER_AGENT)
+              return fetch(input, { ...init, headers })
+            },
           }
         },
         usage,
